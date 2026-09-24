@@ -1,43 +1,54 @@
 import streamlit as st
-import pandas as pd
+import cv2
+import mediapipe as mp
 import numpy as np
-import matplotlib.pyplot as plt
+import tempfile
 
 st.set_page_config(page_title="BioSimCore Clinical Pro", layout="wide")
 
-st.title("BioSimCore Clinical Pro: Веб-платформа биомеханического аудита")
-st.markdown("Профессиональный анализ движений, расчет мышечных усилий по модели Хилла и контроль осанки.")
+st.title("BioSimCore Clinical Pro: Анализ движений")
+st.markdown("Загрузите видеозапись сеанса для автоматического скелетного трекинга и расчета биомеханики.")
 
-# Боковая панель управления
-st.sidebar.header("Параметры сеанса")
-mode = st.sidebar.selectbox("Выберите режим аудита", ["Контроль сидения", "Анализ приседаний", "Анализ походки"])
-uploaded_file = st.sidebar.file_uploader("Загрузите CSV-лог или видео сеанса", type=["csv", "mp4"])
+# Загрузка видеофайла пользователем
+uploaded_file = st.sidebar.file_uploader("Загрузить видео сеанса (MP4, AVI)", type=["mp4", "avi", "mov"])
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Телеметрия в реальном времени")
-    # Демо-метрики для интерфейса
-    st.metric(label="Угол коленного сустава", value="165 °", delta="-5 ° от нормы")
-    st.metric(label="Наклон торса (осанка)", value="4 °", delta="Норма")
-    st.metric(label="Усилие квадрицепса ($F_m$)", value="1420 N", delta="+120 N")
+if uploaded_file is not None:
+    # Сохраняем во временный файл для обработки OpenCV
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
     
-    st.info(f"Активный медицинский профиль: **{mode}**. Статус: Все показатели в пределах нормы.")
-
-with col2:
-    st.subheader("Биомеханические графики")
-    # Генерация демонстрационного графика для сайта
-    frames = np.arange(0, 50)
-    angles = 160.0 - 30.0 * np.sin(frames / 8.0)
-    forces = 2000.0 * 0.8 * (1.0 - np.abs(angles - 160.0) / 100.0)
+    cap = cv2.VideoCapture(tfile.name)
     
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(frames, angles, color='blue', label='Угол колена (°)')
-    ax.set_ylabel('Градусы')
-    ax.set_xlabel('Кадры сеанса')
-    ax.grid(True, linestyle='--', alpha=0.6)
-    ax.legend(loc='upper right')
-    st.pyplot(fig)
+    st.sidebar.success("Видео успешно загружено в систему!")
+    
+    # Инициализация MediaPipe Pose
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    mp_drawing = mp.solutions.drawing_utils
 
-st.markdown("---")
-st.caption("BioSimCore Clinical Pro Engine v2.4 | Разработано для медицинского и эргономического аудита.")
+    st.subheader("Результат обработки видео в реальном времени")
+    stframe = st.empty()
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Конвертация цвета для MediaPipe
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = pose.process(image)
+        
+        # Отрисовка скелета
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        if results.pose_landmarks:
+            mp_drawing.draw_landmarks(
+                image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            
+        # Показываем кадр в интерфейсе Streamlit
+        stframe.image(image, channels="BGR", use_container_width=True)
+        
+    cap.release()
+else:
+    st.info("Пожалуйста, загрузите видеофайл через боковую панель слева, чтобы запустить анализ.")
